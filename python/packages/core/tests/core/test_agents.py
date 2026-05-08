@@ -2453,6 +2453,52 @@ async def test_stores_by_default_false_injects_inmemory(
     assert any(isinstance(p, InMemoryHistoryProvider) for p in agent.context_providers)
 
 
+async def test_non_history_context_provider_still_injects_inmemory(
+    client: SupportsChatGetResponse,
+) -> None:
+    """InMemoryHistoryProvider should be auto-injected even when non-history context providers are registered.
+
+    Regression test for: when context_providers=[skills_provider] (or any non-HistoryProvider),
+    the auto-injection was skipped because the old condition checked `not self.context_providers`
+    instead of `not self._get_history_providers()`. This caused multi-turn approval flows to
+    fail with 400 errors because no history was persisted between runs.
+    """
+    from agent_framework._sessions import InMemoryHistoryProvider
+
+    class NonHistoryProvider(ContextProvider):
+        def __init__(self) -> None:
+            super().__init__(source_id="non-history")
+
+        async def before_run(self, *, agent: Any, session: Any, context: Any, state: Any) -> None:
+            pass
+
+    agent = Agent(client=client, context_providers=[NonHistoryProvider()])
+    session = agent.create_session()
+
+    await agent.run("Hello", session=session)
+
+    # InMemoryHistoryProvider should have been injected despite non-empty context_providers
+    assert any(isinstance(p, InMemoryHistoryProvider) for p in agent.context_providers)
+
+
+async def test_explicit_history_provider_skips_inmemory_injection(
+    client: SupportsChatGetResponse,
+) -> None:
+    """When an explicit HistoryProvider is already registered, InMemoryHistoryProvider should NOT be injected."""
+    from agent_framework._sessions import InMemoryHistoryProvider
+
+    explicit_history = InMemoryHistoryProvider()
+    agent = Agent(client=client, context_providers=[explicit_history])
+    session = agent.create_session()
+
+    await agent.run("Hello", session=session)
+
+    # Should not add a second InMemoryHistoryProvider
+    history_providers = [p for p in agent.context_providers if isinstance(p, InMemoryHistoryProvider)]
+    assert len(history_providers) == 1
+    assert history_providers[0] is explicit_history
+
+
 async def test_stores_by_default_with_store_false_injects_inmemory(
     client: SupportsChatGetResponse,
 ) -> None:
